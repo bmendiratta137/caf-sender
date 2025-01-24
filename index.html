@@ -2,6 +2,8 @@
 <html>
 <head>
 <title>Cast Videos: Google Cast Chrome Sender SDK Demo App</title>
+<script src="./newrelic-caf.min.js"></script>
+<script src="./agent.js"></script>
 <link rel="icon" type="image/x-icon" href="imagefiles/favicon.ico" />
 <link rel="icon" type="image/png" href="imagefiles/favicon_16x16.png" />
 <link rel="icon" type="image/png" href="imagefiles/favicon_32x32.png" />
@@ -61,6 +63,57 @@
       <script src="CastVideos.js"></script>
       <script type="text/javascript">
         var castPlayer = new CastPlayer();
+          // Initialize New Relic Video Tracker
+  const videoElement = document.getElementsByTagName('cast-media-player')[0];
+  const newRelicTracker = new NewRelicVideoTracker({
+      licenseKey: 'NRBR-940177a1ae3f2107673',
+      applicationID: '601520543',
+      videoElement: videoElement // Make sure this references the correct element
+  });
+  console.log('New Relic Tracker initialized');
+
+  // Initialize Cast Application Framework
+  const context = cast.framework.CastReceiverContext.getInstance();
+  const playerManager = context.getPlayerManager();
+
+  playerManager.addEventListener(cast.framework.events.EventType.PLAYER_LOAD_COMPLETE, () => {
+      newRelicTracker.trackLoad();
+      console.log('PLAYER_LOAD_COMPLETE event tracked');
+  });
+
+  playerManager.addEventListener(cast.framework.events.EventType.PLAY, () => {
+      newRelicTracker.trackPlay();
+      console.log('PLAY event tracked');
+  });
+
+  playerManager.addEventListener(cast.framework.events.EventType.PAUSE, () => {
+      newRelicTracker.trackPause();
+      console.log('PAUSE event tracked');
+  });
+
+  playerManager.addEventListener(cast.framework.events.EventType.ENDED, () => {
+      newRelicTracker.trackEnd();
+      console.log('ENDED event tracked');
+  });
+
+  playerManager.addEventListener(cast.framework.events.EventType.ERROR, (event) => {
+      newRelicTracker.trackError(event);
+      console.error('ERROR event tracked', event);
+  });
+
+  // Start the Cast Receiver
+  context.start();
+
+  // Set logging level (show all messages)
+  cast.framework.CastReceiverContext.getInstance().setLoggerLevel(cast.framework.LoggerLevel.DEBUG);
+
+  // Capture JS errors
+  window.onerror = function (msg, url, line) {
+      console.log("Message: " + msg);
+      console.log("URL: " + url);
+      console.log("Line number: " + line);
+      newrelic.addPageAction("JSError", {"errMessage": msg, "errUrl": url, "errLine": line})
+  }
       </script>
           <script src="https://www.gstatic.com/cv/js/sender/v1/cast_sender.js"></script>
           <script src="sender.js"></script>
