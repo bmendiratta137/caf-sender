@@ -1,4 +1,4 @@
-// Copyright 2019 Google LLC. All Rights Reserved.
+// Copyright 2021 Google LLC. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -67,6 +67,12 @@ var CastPlayer = function() {
     /** @type {PLAYER_STATE} A state for media playback */
     this.playerState = PLAYER_STATE.IDLE;
 
+    /* Cast player variables */
+    /** @type {cast.framework.RemotePlayer} */
+    this.remotePlayer = null;
+    /** @type {cast.framework.RemotePlayerController} */
+    this.remotePlayerController = null;
+
     /* Current media variables */
     /** @type {number} A number for current media index */
     this.currentMediaIndex = 0;
@@ -91,9 +97,52 @@ var CastPlayer = function() {
     this.initializeUI();
 };
 
+CastPlayer.prototype.initializeCastPlayer = function() {
+
+    var options = {};
+
+    // Set the receiver application ID to your own (created in the
+    // Google Cast Developer Console), or optionally
+    // use the chrome.cast.media.DEFAULT_MEDIA_RECEIVER_APP_ID
+    options.receiverApplicationId = 'C0868879';
+
+    // Auto join policy can be one of the following three:
+    // ORIGIN_SCOPED - Auto connect from same appId and page origin
+    // TAB_AND_ORIGIN_SCOPED - Auto connect from same appId, page origin, and tab
+    // PAGE_SCOPED - No auto connect
+    options.autoJoinPolicy = chrome.cast.AutoJoinPolicy.ORIGIN_SCOPED;
+    options.androidReceiverCompatible = false;
+
+    cast.framework.CastContext.getInstance().setOptions(options);
+
+    let credentialsData = new chrome.cast.CredentialsData("{\"userId\": \"abc\"}");
+    cast.framework.CastContext.getInstance().setLaunchCredentialsData(credentialsData);
+
+    this.remotePlayer = new cast.framework.RemotePlayer();
+    this.remotePlayerController = new cast.framework.RemotePlayerController(this.remotePlayer);
+    this.remotePlayerController.addEventListener(
+        cast.framework.RemotePlayerEventType.IS_CONNECTED_CHANGED,
+        this.switchPlayer.bind(this)
+    );
+};
+
 /*
  * PlayerHandler and setup functions
  */
+
+CastPlayer.prototype.switchPlayer = function() {
+    this.stopProgressTimer();
+    this.resetVolumeSlider();
+    this.playerHandler.stop();
+    this.playerState = PLAYER_STATE.IDLE;
+    if (cast && cast.framework) {
+        if (this.remotePlayer.isConnected) {
+            this.setupRemotePlayer();
+            return;
+        }
+    }
+    this.setupLocalPlayer();
+};
 
 /**
  * PlayerHandler
@@ -308,6 +357,167 @@ CastPlayer.prototype.setupLocalPlayer = function () {
     }
 };
 
+/**
+ * Set the PlayerHandler target to use the remote player
+ */
+CastPlayer.prototype.setupRemotePlayer = function () {
+    var castSession = cast.framework.CastContext.getInstance().getCurrentSession();
+
+    // Add event listeners for player changes which may occur outside sender app
+    this.remotePlayerController.addEventListener(
+        cast.framework.RemotePlayerEventType.IS_PAUSED_CHANGED,
+        function() {
+            if (this.remotePlayer.isPaused) {
+                this.playerHandler.pause();
+            } else {
+                this.playerHandler.play();
+            }
+        }.bind(this)
+    );
+
+    this.remotePlayerController.addEventListener(
+        cast.framework.RemotePlayerEventType.IS_MUTED_CHANGED,
+        function() {
+            if (this.remotePlayer.isMuted) {
+                this.playerHandler.mute();
+            } else {
+                this.playerHandler.unMute();
+            }
+        }.bind(this)
+    );
+
+    this.remotePlayerController.addEventListener(
+        cast.framework.RemotePlayerEventType.VOLUME_LEVEL_CHANGED,
+        function() {
+            var newVolume = this.remotePlayer.volumeLevel * FULL_VOLUME_HEIGHT;
+            var p = document.getElementById('audio_bg_level');
+            p.style.height = newVolume + 'px';
+            p.style.marginTop = -newVolume + 'px';
+        }.bind(this)
+    );
+
+    // This object will implement PlayerHandler callbacks with
+    // remotePlayerController, and makes necessary UI updates specific
+    // to remote playback
+    var playerTarget = {};
+
+    playerTarget.play = function () {
+        if (this.remotePlayer.isPaused) {
+            this.remotePlayerController.playOrPause();
+        }
+
+        var vi = document.getElementById('video_image');
+        vi.style.display = 'block';
+        var localPlayer = document.getElementById('video_element');
+        localPlayer.style.display = 'none';
+    }.bind(this);
+
+    playerTarget.pause = function () {
+        if (!this.remotePlayer.isPaused) {
+            this.remotePlayerController.playOrPause();
+        }
+    }.bind(this);
+
+    playerTarget.stop = function () {
+         this.remotePlayerController.stop();
+    }.bind(this);
+
+    playerTarget.load = function (mediaIndex) {
+        console.log('Loading...' + this.mediaContents[mediaIndex]['title']);
+        var mediaInfo = new chrome.cast.media.MediaInfo(
+            this.mediaContents[mediaIndex]['sources'][0], 'video/mp4');
+
+        mediaInfo.metadata = new chrome.cast.media.GenericMediaMetadata();
+        mediaInfo.metadata.metadataType = chrome.cast.media.MetadataType.GENERIC;
+        mediaInfo.metadata.title = this.mediaContents[mediaIndex]['title'];
+        mediaInfo.metadata.images = [
+            {'url': MEDIA_SOURCE_ROOT + this.mediaContents[mediaIndex]['thumb']}];
+
+        var request = new chrome.cast.media.LoadRequest(mediaInfo);
+        request.credentials = 'user-credentials';
+        request.atvCredentials = 'atv-user-credentials';
+        castSession.loadMedia(request).then(
+            this.playerHandler.loaded.bind(this.playerHandler),
+            function (errorCode) {
+                this.playerState = PLAYER_STATE.ERROR;
+                console.log('Remote media load error: ' +
+                    CastPlayer.getErrorMessage(errorCode));
+            }.bind(this));
+    }.bind(this);
+
+    playerTarget.getCurrentMediaTime = function() {
+        return this.remotePlayer.currentTime;
+    }.bind(this);
+
+    playerTarget.getMediaDuration = function() {
+        return this.remotePlayer.duration;
+    }.bind(this);
+
+    playerTarget.updateDisplayMessage = function () {
+        document.getElementById('playerstate').style.display = 'block';
+        document.getElementById('playerstatebg').style.display = 'block';
+        document.getElementById('video_image_overlay').style.display = 'block';
+        document.getElementById('playerstate').innerHTML =
+            this.mediaContents[ this.currentMediaIndex]['title'] + ' ' +
+            this.playerState + ' on ' + castSession.getCastDevice().friendlyName;
+    }.bind(this);
+
+    playerTarget.setVolume = function (volumeSliderPosition) {
+        // Add resistance to avoid loud volume
+        var currentVolume = this.remotePlayer.volumeLevel;
+        var p = document.getElementById('audio_bg_level');
+        if (volumeSliderPosition < FULL_VOLUME_HEIGHT) {
+            var vScale =  this.currentVolume * FULL_VOLUME_HEIGHT;
+            if (volumeSliderPosition > vScale) {
+                volumeSliderPosition = vScale + (pos - vScale) / 2;
+            }
+            p.style.height = volumeSliderPosition + 'px';
+            p.style.marginTop = -volumeSliderPosition + 'px';
+            currentVolume = volumeSliderPosition / FULL_VOLUME_HEIGHT;
+        } else {
+            currentVolume = 1;
+        }
+        this.remotePlayer.volumeLevel = currentVolume;
+        this.remotePlayerController.setVolumeLevel();
+    }.bind(this);
+
+    playerTarget.mute = function () {
+        if (!this.remotePlayer.isMuted) {
+            this.remotePlayerController.muteOrUnmute();
+        }
+    }.bind(this);
+
+    playerTarget.unMute = function () {
+        if (this.remotePlayer.isMuted) {
+            this.remotePlayerController.muteOrUnmute();
+        }
+    }.bind(this);
+
+    playerTarget.isMuted = function() {
+        return this.remotePlayer.isMuted;
+    }.bind(this);
+
+    playerTarget.seekTo = function (time) {
+        this.remotePlayer.currentTime = time;
+        this.remotePlayerController.seek();
+    }.bind(this);
+
+    this.playerHandler.setTarget(playerTarget);
+
+    // Setup remote player volume right on setup
+    // The remote player may have had a volume set from previous playback
+    if (this.remotePlayer.isMuted) {
+        this.playerHandler.mute();
+    }
+    var currentVolume = this.remotePlayer.volumeLevel * FULL_VOLUME_HEIGHT;
+    var p = document.getElementById('audio_bg_level');
+    p.style.height = currentVolume + 'px';
+    p.style.marginTop = -currentVolume + 'px';
+
+    this.hideFullscreenButton();
+
+    this.playerHandler.play();
+};
 
 /**
  * Callback when media is loaded in local player
@@ -507,7 +717,6 @@ CastPlayer.prototype.requestFullScreen = function() {
     }
 };
 
-
 /**
  * Exit full screen mode
  */
@@ -684,6 +893,40 @@ CastPlayer.prototype.addVideoThumbs = function() {
             '" class="thumbnail">';
         newdiv.addEventListener('click', this.selectMedia.bind(this, i));
         ni.appendChild(newdiv);
+    }
+};
+
+/**
+ * Makes human-readable message from chrome.cast.Error
+ * @param {chrome.cast.Error} error
+ * @return {string} error message
+ */
+CastPlayer.getErrorMessage = function(error) {
+    switch (error.code) {
+        case chrome.cast.ErrorCode.API_NOT_INITIALIZED:
+            return 'The API is not initialized.' +
+                (error.description ? ' :' + error.description : '');
+        case chrome.cast.ErrorCode.CANCEL:
+            return 'The operation was canceled by the user' +
+                (error.description ? ' :' + error.description : '');
+        case chrome.cast.ErrorCode.CHANNEL_ERROR:
+            return 'A channel to the receiver is not available.' +
+                (error.description ? ' :' + error.description : '');
+        case chrome.cast.ErrorCode.EXTENSION_MISSING:
+            return 'The Cast extension is not available.' +
+                (error.description ? ' :' + error.description : '');
+        case chrome.cast.ErrorCode.INVALID_PARAMETER:
+            return 'The parameters to the operation were not valid.' +
+                (error.description ? ' :' + error.description : '');
+        case chrome.cast.ErrorCode.RECEIVER_UNAVAILABLE:
+            return 'No receiver was compatible with the session request.' +
+                (error.description ? ' :' + error.description : '');
+        case chrome.cast.ErrorCode.SESSION_ERROR:
+            return 'A session could not be created, or a session was invalid.' +
+                (error.description ? ' :' + error.description : '');
+        case chrome.cast.ErrorCode.TIMEOUT:
+            return 'The operation timed out.' +
+                (error.description ? ' :' + error.description : '');
     }
 };
 

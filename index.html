@@ -1,3 +1,19 @@
+<!--
+// Copyright 2019 Google LLC. All Rights Reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+-->
+
 <!DOCTYPE html>
 <html>
 <head>
@@ -31,6 +47,7 @@
            <div id="progress_indicator"></div>
            <div id="fullscreen_expand"></div>
            <div id="fullscreen_collapse"></div>
+           <google-cast-launcher id="castbutton"></google-cast-launcher>
            <div id="audio_bg"></div>
            <div id="audio_bg_track"></div>
            <div id="audio_indicator"></div>
@@ -60,14 +77,13 @@
 
       <script src="CastVideos.js"></script>
       <script type="text/javascript">
-        // Initialize Cast Application Framework
-        const context = cast.framework.CastReceiverContext.getInstance();
-        const playerManager = context.getPlayerManager();
-        playerManager.addEventListener(cast.framework.events.EventType.PLAYER_LOAD_COMPLETE, () => {
-            newRelicTracker.trackLoad();
-        });
+        var castPlayer = new CastPlayer();
+        window['__onGCastApiAvailable'] = function(isAvailable) {
+            if (isAvailable) {
+                castPlayer.initializeCastPlayer();
+            }
+        };
       </script>
-          <script src="https://www.gstatic.com/cv/js/sender/v1/cast_sender.js"></script>
-          <script src="sender.js"></script>
+      <script type="text/javascript" src="https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1"></script>
 </body>
 </html>
